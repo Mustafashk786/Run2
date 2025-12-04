@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Run Jabir Run - Fixed</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+    <style>
+        /* Basic layout */
+        html,body{height:100%;margin:0;background:#000;font-family:sans-serif}
+        #game-container{position:relative;width:100%;height:100vh;display:flex;align-items:center;justify-content:center}
+        canvas{display:block;width:100%;height:100%}
+
+        /* UI layer */
+        #ui-layer{position:absolute;inset:0;pointer-events:none}
+        #score-board{position:absolute;left:15px;top:15px;color:#ffd700;font-weight:700;font-size:18px;text-shadow:2px 2px 0 #000;pointer-events:auto}
+        #mode-label{position:absolute;left:15px;top:50px;color:#fff;font-size:13px;opacity:.9;pointer-events:none}
+        #mute-btn{position:absolute;right:15px;top:15px;font-size:28px;pointer-events:auto;cursor:pointer}
+        #message{position:absolute;top:40%;left:0;right:0;text-align:center;color:#fff;font-weight:700;font-size:28px;text-shadow:0 0 10px #000;display:none;pointer-events:auto}
+
+        /* Controls */
+        #controls{position:absolute;left:0;right:0;bottom:14px;height:80px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;box-sizing:border-box;pointer-events:none}
+        .btn{width:70px;height:70px;border-radius:50%;background:rgba(255,255,255,0.12);display:flex;align-items:center;justify-content:center;color:#fff;font-size:30px;border:2px solid rgba(255,255,255,0.18);pointer-events:auto;user-select:none;touch-action:manipulation;cursor:pointer}
+        .btn:active{transform:scale(.96);background:rgba(255,255,255,0.22)}
+
+        /* Difficulty overlay */
+        #difficulty-screen{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(rgba(0,0,0,0.55),rgba(0,0,0,0.55));z-index:9999;pointer-events:auto}
+        .diff-box{background:rgba(255,255,255,0.04);padding:18px;border-radius:12px;width:320px;text-align:center;pointer-events:auto}
+        .diff-title{color:#fff;font-size:20px;margin-bottom:10px}
+        .diff-btn{display:inline-block;margin:8px;padding:10px 18px;border-radius:8px;background:rgba(255,255,255,0.06);color:#fff;border:1px solid rgba(255,255,255,0.09);cursor:pointer;user-select:none;touch-action:manipulation}
+        .diff-btn:active{transform:scale(.985)}
+        @media (max-width:420px){.btn{width:60px;height:60px;font-size:26px}.diff-box{width:90%}}
+    </style>
+</head>
+<body>
+<div id="game-container">
+    <canvas id="gameCanvas" width="854" height="480"></canvas>
+
+    <div id="ui-layer">
+        <div id="score-board">💰 0</div>
+        <div id="mode-label"></div>
+        <div id="mute-btn">🔇</div>
+        <div id="message"></div>
+    </div>
+
+    <div id="controls">
+        <div style="display:flex;gap:14px">
+            <div class="btn" id="leftBtn">←</div>
+            <div class="btn" id="rightBtn">→</div>
+        </div>
+        <div class="btn" id="jumpBtn">↑</div>
+    </div>
+
+    <div id="difficulty-screen" aria-hidden="false">
+        <div class="diff-box" role="dialog" aria-label="Choose Difficulty">
+            <div class="diff-title">Choose Difficulty</div>
+            <div>
+                <div class="diff-btn" id="easyBtn">Easy</div>
+                <div class="diff-btn" id="mediumBtn">Medium</div>
+                <div class="diff-btn" id="hardBtn">Hard</div>
+            </div>
+            <p style="color:#cfcfcf;font-size:13px;margin-top:12px">Tip: Use arrow keys / space or on-screen buttons. Tap 🔇 to enable sound.</p>
+        </div>
+    </div>
+</div>
+
+<script>
+/* =========================
+   Run Jabir Run - Fixed
+   All fixes included:
+   - Map generator robust
+   - Difficulty working
+   - Wizard density sensible
+   - Projectile direction fixed
+   - Sounds unlocked after user interaction
+   - Input working on mobile & desktop
+   ========================= */
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+const GAME_WIDTH = 854;
+const GAME_HEIGHT = 480;
+canvas.width = GAME_WIDTH;
+canvas.height = GAME_HEIGHT;
+
+/* -------------------------
+   Assets (images + sounds)
+   ------------------------- */
+const assets = {
+  hero: new Image(),
+  queen: new Image(),
+  bg: new Image(),
+  coin: new Image(),
+  wizard: new Image(),
+  rainSound: new Audio('rain.mp3'),
+  coinSound: new Audio('coin.mp3'),
+  winSound: new Audio('win.mp3'),
+  loseSound: new Audio('lose.mp3')
+};
+
+// use GitHub raw main links (adjust if repo structure differs)
+assets.hero.src   = 'https://raw.githubusercontent.com/Mustafashk786/run/main/jabir.png';
+assets.queen.src  = 'https://raw.githubusercontent.com/Mustafashk786/run/main/queen.png';
+assets.bg.src     = 'https://raw.githubusercontent.com/Mustafashk786/run/main/bg.png';
+assets.wizard.src = 'https://raw.githubusercontent.com/Mustafashk786/run/main/arsalan.png';
+assets.coin.src   = 'https://raw.githubusercontent.com/Mustafashk786/run/main/coin.png';
+
+// audio loop
+assets.rainSound.loop = true;
+
+// state flags
+let soundEnabled = false;
+let userInteracted = false; // must be true before playing audio to satisfy browser autoplay rules
+
+/* -------------------------
+   UI references
+   ------------------------- */
+const scoreBoard = document.getElementById('score-board');
+const muteBtn = document.getElementById('mute-btn');
+const messageEl = document.getElementById('message');
+const difficultyScreen = document.getElementById('difficulty-screen');
+const modeLabel = document.getElementById('mode-label');
+
+/* -------------------------
+   Game state
+   ------------------------- */
+let score = 0;
+let cameraX = 0;
+let frameCount = 0;
+let activeMessage = 'Tap Controls to Start';
+let gameRunning = false;
+let difficulty = 'Medium';
+let params = { wizardFireRate:150, projectileSpeed:5, wizardDensity:0.10 }; // defaults (speed positive)
+
+/* Player */
+const HERO_SIZE = { w:50, h:80 };
+const player = { x:100, y:200, w:HERO_SIZE.w, h:HERO_SIZE.h, vx:0, vy:0, speed:6, jump:-14, grounded:false, facingRight:true };
+
+/* Particles & arrays */
+const rainDrops = Array.from({length:80}, ()=>({ x:Math.random()*GAME_WIDTH, y:Math.random()*GAME_HEIGHT, speed:Math.random()*10+8 }));
+const flowerParticles = [];
+let projectiles = [];
+let wizards = [];
+
+/* Map */
+const MAP_LENGTH = 5000;
+const level = [];
+const COIN_SIZE = { w:30, h:30 };
+const TREE_SIZE = { w:60, h:140 };
+const WIZARD_SIZE = { w:60, h:80 };
+const QUEEN_SIZE = { w:50, h:80 };
+
+/* Controls */
+let keys = { left:false, right:false, up:false };
+
+/* -------------------------
+   Difficulty buttons - ensure interaction unlocks audio
+   ------------------------- */
+document.getElementById('easyBtn').addEventListener('click', ()=>startWithDifficulty('Easy'));
+document.getElementById('mediumBtn').addEventListener('click', ()=>startWithDifficulty('Medium'));
+document.getElementById('hardBtn').addEventListener('click', ()=>startWithDifficulty('Hard'));
+
+/* unlock audio helper */
+function unlockAudio() {
+  if(userInteracted) return;
+  userInteracted = true;
+  // some browsers require a user gesture before audio play; attempt a silent play & pause to unlock
+  try {
+    assets.rainSound.play().then(()=>{ assets.rainSound.pause(); assets.rainSound.currentTime = 0; }).catch(()=>{});
+    // same for sfx
+    [assets.coinSound, assets.winSound, assets.loseSound].forEach(a=>{
+      a.play().then(()=>{ a.pause(); a.currentTime = 0; }).catch(()=>{});
+    });
+  } catch(e){}
+}
+
+/* start game with chosen difficulty */
+function startWithDifficulty(diff) {
+  difficulty = diff;
+  // reasonable densities (probability between 0 and 1)
+  if(diff === 'Easy') { params = { wizardFireRate:220, projectileSpeed:4, wizardDensity:0.05 }; }
+  else if(diff === 'Medium') { params = { wizardFireRate:150, projectileSpeed:5, wizardDensity:0.10 }; }
+  else if(diff === 'Hard') { params = { wizardFireRate:100, projectileSpeed:6, wizardDensity:0.16 }; }
+
+  modeLabel.innerText = `Mode: ${difficulty}`;
+  difficultyScreen.style.display = 'none';
+  unlockAudio();
+  gameRunning = true;
+  generateMap();
+  // only auto-play background if user enabled sound
+  if(soundEnabled) { assets.rainSound.play().catch(()=>{}); }
+}
+
+/* mute button toggles */
+muteBtn.addEventListener('click', ()=>{
+  soundEnabled = !soundEnabled;
+  muteBtn.innerText = soundEnabled ? '🔊' : '🔇';
+  // if user hasn't interacted yet, mark it (so browser will allow play)
+  unlockAudio();
+  if(soundEnabled) assets.rainSound.play().catch(()=>{});
+  else assets.rainSound.pause();
+});
+
+/* helper to play sfx (only if sound enabled & userInteracted) */
+function playSfx(audio) {
+  if(!soundEnabled) return;
+  if(!userInteracted) return;
+  if(audio && audio.readyState >= 2) {
+    try { audio.currentTime = 0; audio.play().catch(()=>{}); } catch(e){}
+  }
+}
+
+/* -------------------------
+   Map generator (robust)
+   ------------------------- */
+function generateMap() {
+  level.length = 0;
+  wizards.length = 0;
+  projectiles.length = 0;
+  score = 0;
+  scoreBoard.innerText = '💰 0';
+  frameCount = 0;
+  player.x = 100; player.y = 200; player.vx = 0; player.vy = 0; player.grounded = false;
+
+  // starting ground
+  level.push({ x:0, y:400, w:600, h:80, type:1 });
+  let x = 600;
+
+  while(x < MAP_LENGTH - 450) {
+    const r = Math.random();
+    if(r < 0.45) {
+      // ground/run
+      const w = 180 + Math.floor(Math.random()*420);
+      level.push({ x:x, y:400, w:w, h:80, type:1 });
+      // coins scattered above ground occasionally
+      if(Math.random() < 0.6) {
+        const coinCount = 1 + Math.floor(Math.random()*3);
+        for(let i=0;i<coinCount;i++){
+          level.push({ x:x + 30 + i*40 + Math.floor(Math.random()*20), y:360 - Math.floor(Math.random()*20), w:COIN_SIZE.w, h:COIN_SIZE.h, type:3 });
+        }
+      }
+      // occasional wizard on ground segment
+      if(Math.random() < params.wizardDensity) {
+        const wy = 320 + Math.random()*50;
+        const wx = x + 60 + Math.random()*(Math.max(0,w-120));
+        level.push({ x:wx, y:wy, w:WIZARD_SIZE.w, h:WIZARD_SIZE.h, type:9, patrol: Math.max(160, 200 + Math.random()*340) });
+      }
+      x += w;
+    } else if(r < 0.75) {
+      // platform / jump
+      const gap = 90 + Math.floor(Math.random()*180);
+      const platformW = 90 + Math.floor(Math.random()*160);
+      const platformY = 240 + Math.floor(Math.random()*120);
+      level.push({ x: x + gap, y: platformY, w: platformW, h: 28, type:1 });
+      if(Math.random() < 0.6) level.push({ x: x + gap + 20, y: platformY - 40, w:COIN_SIZE.w, h:COIN_SIZE.h, type:3 });
+      // wizard on platform sometimes
+      if(Math.random() < params.wizardDensity * 0.9) {
+        const wx = x + gap + Math.floor(Math.random()*(platformW-40));
+        level.push({ x:wx, y:platformY - 70, w:WIZARD_SIZE.w, h:WIZARD_SIZE.h, type:9, patrol: Math.max(80, platformW) });
+      }
+      x += gap + platformW;
+    } else {
+      // scenery trees
+      const gap = 110 + Math.floor(Math.random()*220);
+      level.push({ x:x + gap, y:260, w:TREE_SIZE.w, h:TREE_SIZE.h, type:7 });
+      if(Math.random() < 0.5) level.push({ x:x + gap + 30, y:360, w:COIN_SIZE.w, h:COIN_SIZE.h, type:3 });
+      x += gap + TREE_SIZE.w;
+    }
+  }
+
+  // final approach
+  level.push({ x: MAP_LENGTH - 800, y:400, w:600, h:80, type:1 });
+  for(let i=0;i<4;i++){
+    const wx = MAP_LENGTH - 700 + i*100;
+    level.push({ x:wx, y:320, w:WIZARD_SIZE.w, h:WIZARD_SIZE.h, type:9, patrol: 220 + i*40 });
+  }
+  level.push({ x: MAP_LENGTH - 360, y:310, w:QUEEN_SIZE.w, h:QUEEN_SIZE.h, type:4 });
+
+  // convert to wizard AI list
+  for(let i=0;i<level.length;i++){
+    const p = level[i];
+    if(p.type === 9) {
+      const range = p.patrol || 240;
+      wizards.push({ x:p.x, y:p.y, w:p.w, h:p.h, dir: Math.random()<0.5? -1 : 1, rangeMin: p.x - range/2, rangeMax: p.x + range/2, fireTimer: Math.floor(Math.random()*params.wizardFireRate) });
+    }
+  }
+}
+
+/* -------------------------
+   Collision helper
+   ------------------------- */
+function rectIntersect(x1,y1,w1,h1,x2,y2,w2,h2) {
+  return x2 < x1 + w1 && x2 + w2 > x1 && y2 < y1 + h1 && y2 + h2 > y1;
+}
+
+/* -------------------------
+   Game update: physics & AI
+   ------------------------- */
+function update() {
+  if(!gameRunning) return;
+  frameCount++;
+
+  // active messages every few seconds
+  if(frameCount % 180 === 0) {
+    const arr = ["Bismillah! 🤲","Himmat Mat Haaro! 💪","Sabr (Patience) 🌙","Run Jabir! 🏃‍♂️","Allah is with you! ❤️","Focus on the Goal! 🎯","MashaAllah! ✨","Save the Queen! 👑"];
+    activeMessage = arr[Math.floor(Math.random()*arr.length)];
+  }
+
+  // movement
+  if(keys.right) { player.vx = player.speed; player.facingRight = true; }
+  else if(keys.left) { player.vx = -player.speed; player.facingRight = false; }
+  else player.vx = 0;
+  if(keys.up && player.grounded) { player.vy = player.jump; player.grounded = false; }
+
+  // physics
+  player.vy += 0.7;
+  player.x += player.vx;
+  player.y += player.vy;
+  if(player.x < 12) player.x = 12;
+
+  // camera
+  cameraX = player.x - 100;
+  if(cameraX < 0) cameraX = 0;
+  if(cameraX > MAP_LENGTH - GAME_WIDTH) cameraX = MAP_LENGTH - GAME_WIDTH;
+
+  // rain
+  rainDrops.forEach(d=>{
+    d.y += d.speed;
+    d.x -= 2;
+    if(d.y > GAME_HEIGHT) { d.y = -20; d.x = cameraX + Math.random()*GAME_WIDTH + 100; }
+  });
+
+  // wizard AI and shooting
+  wizards.forEach(w=>{
+    w.x += w.dir * 1.2;
+    if(w.x < w.rangeMin) { w.x = w.rangeMin; w.dir = 1; }
+    if(w.x > w.rangeMax) { w.x = w.rangeMax; w.dir = -1; }
+
+    // firing logic
+    w.fireTimer++;
+    const effectiveFireRate = Math.max(30, params.wizardFireRate);
+    const dist = Math.abs(w.x - player.x);
+    if(w.fireTimer > effectiveFireRate && dist < 700) {
+      const px = w.x;
+      const py = w.y + 30;
+      const dirSign = (player.x < px) ? -1 : 1;
+      projectiles.push({ x: px, y: py, vx: dirSign * params.projectileSpeed, w:20, h:20 });
+      w.fireTimer = 0;
+    }
+  });
+
+  // projectiles
+  for(let i=projectiles.length-1;i>=0;i--){
+    const p = projectiles[i];
+    p.x += p.vx;
+    if(p.x < cameraX - 240 || p.x > cameraX + GAME_WIDTH + 240) { projectiles.splice(i,1); continue; }
+    if(rectIntersect(player.x, player.y, player.w, player.h, p.x, p.y, p.w, p.h)) {
+      endGame(false);
+      return;
+    }
+  }
+
+  // fall death
+  if(player.y > GAME_HEIGHT + 220) { endGame(false); return; }
+
+  // collisions with level
+  checkCollisions();
+
+  // update flower particles
+  for(let i=flowerParticles.length-1;i>=0;i--) {
+    const f = flowerParticles[i];
+    f.vy += 0.18;
+    f.x += f.vx;
+    f.y += f.vy;
+    f.rot += f.vr;
+    f.life--;
+    if(f.life <= 0) flowerParticles.splice(i,1);
+  }
+}
+
+/* -------------------------
+   Collision checks
+   ------------------------- */
+function checkCollisions() {
+  player.grounded = false;
+  for(let i=0;i<level.length;i++){
+    const p = level[i];
+    if(rectIntersect(player.x, player.y, player.w, player.h, p.x, p.y, p.w, p.h)) {
+      if(p.type === 1) {
+        // ground/platform
+        if(player.vy > 0 && (player.y + player.h - player.vy) <= (p.y + 14)) {
+          player.grounded = true;
+          player.vy = 0;
+          player.y = p.y - player.h;
+        }
+      } else if(p.type === 3) {
+        // coin
+        score++;
+        playSfx(assets.coinSound);
+        scoreBoard.innerText = '💰 ' + score;
+        level.splice(i,1);
+        i--;
+      } else if(p.type === 4) {
+        // queen reached -> win scene
+        triggerWinScene();
+        return;
+      }
+    }
+  }
+}
+
+/* -------------------------
+   Win / Lose
+   ------------------------- */
+function triggerWinScene() {
+  gameRunning = false;
+  playSfx(assets.winSound);
+
+  // bursting flowers across top of camera area
+  for(let i=0;i<120;i++){
+    flowerParticles.push({
+      x: player.x - 80 + Math.random()*360,
+      y: player.y - 120 + Math.random()*80,
+      vx: (Math.random()-0.5) * 3.5,
+      vy: -2 - Math.random()*2,
+      vr: (Math.random()-0.5) * 0.25,
+      rot: 0,
+      life: 120 + Math.floor(Math.random()*120),
+      size: 6 + Math.random()*16,
+      color: (Math.random() < 0.45 ? "#ff77aa" : (Math.random()<0.8 ? "#ffd1dc" : "#fff1a8"))
+    });
+  }
+
+  messageEl.style.display = 'block';
+  messageEl.style.color = '#ff69b4';
+  messageEl.innerHTML = "She is right for you…<br><span style='font-size:18px'>Propose her in real life ❤️</span><br><span style='font-size:14px'>Tap to Restart</span>";
+
+  // allow clicking to restart
+  setTimeout(()=>{
+    document.body.onclick = ()=> location.reload();
+  }, 200);
+}
+
+function endGame(win) {
+  gameRunning = false;
+  messageEl.style.display = 'block';
+  if(win) {
+    messageEl.style.color = '#00ff88';
+    messageEl.innerHTML = 'QUEEN SAVED! ❤️<br><span style="font-size:16px">Tap to Play Again</span>';
+    playSfx(assets.winSound);
+  } else {
+    messageEl.style.color = 'red';
+    messageEl.innerHTML = 'YOU DIED ☠️<br><span style="font-size:16px">Tap to Restart</span>';
+    playSfx(assets.loseSound);
+  }
+  assets.rainSound.pause();
+  setTimeout(()=>{ document.body.onclick = ()=> location.reload(); }, 400);
+}
+
+/* -------------------------
+   Drawing
+   ------------------------- */
+function draw() {
+  // clear
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0,0,GAME_WIDTH,GAME_HEIGHT);
+
+  // background
+  if(assets.bg.complete && assets.bg.naturalWidth) ctx.drawImage(assets.bg, 0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+  ctx.save();
+  ctx.translate(-cameraX, 0);
+
+  // top message (in-world)
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.textAlign = 'center';
+  ctx.fillText(activeMessage, cameraX + GAME_WIDTH/2, 60);
+
+  // draw level
+  for(let i=0;i<level.length;i++){
+    const p = level[i];
+    if(p.type === 1) {
+      ctx.fillStyle = '#444'; ctx.fillRect(p.x, p.y, p.w, p.h);
+      ctx.strokeStyle = '#666'; ctx.strokeRect(p.x, p.y,
